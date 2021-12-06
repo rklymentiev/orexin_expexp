@@ -1,0 +1,192 @@
+import pandas as pd
+from tqdm import tqdm
+from datetime import datetime, timedelta
+from tkinter import Tk, filedialog
+
+
+def initial_cleaning(input_df):
+    # sort the values since for some reason observations sometimes mixed in time
+    input_df['DateTime'] = input_df['DateTime'].astype(float)
+    input_df.sort_values(by='DateTime', inplace=True)
+    input_df.reset_index(drop=True, inplace=True)
+
+    # some datetime manipulations
+    input_df['Timestamp'] = input_df['DateTime'].apply(lambda x: datetime.timestamp(from_ordinal(x)))
+    input_df['DateTime'] = input_df['Timestamp'].apply(lambda x: datetime.fromtimestamp(x))
+
+    return input_df
+
+
+def from_ordinal(ordinal, _epoch=datetime(1899, 12, 30)):
+    """Converts serial date-time to DateTime object.
+    Parameters
+    ----------
+    ordinal : float or int
+        Original serial date-time.
+    _epoch : datetime
+        Start of the count.
+        NOTE: for some reason timestamp is shifted by 2 days
+        backwards from 01-01-1900, that is why default value
+        is set to 30-12-1899.
+    """
+    return _epoch + timedelta(days=ordinal)
+
+
+def fcsrtt_data_cleaner(input_file_path, input_encoding="utf_16", input_sep=";"):
+    """Performs data manipulation from the raw csv file. Transform data in a way
+    that 1 row represents the single trial.
+    Parameters
+    ----------
+    input_file_path : str
+        Path to the csv file with the raw data.
+    input_encoding : str
+        Encoding of an input file.
+    input_sep : str
+        Delimiter to use for an input file.
+    Returns
+    ----------
+    final_output : DataFrame
+        Resulted DataFrame object.
+    """
+
+    # resulted data is encoded to 'utf_16', change if different
+    try:
+        input_df = pd.read_csv(input_file_path, encoding=input_encoding, sep=input_sep)
+        len(input_df['DateTime']) # check whether the `sep` was chosen right
+    except:
+        # exit the function if the input file cannot be opened
+        print("\nError while reading the input file. Change the `encoding` or `sep` parameters in the script.")
+        return None
+
+    # drop first rows from the data with the technical info
+    input_df = input_df[~input_df['DateTime'].astype(str).apply(lambda x: x.startswith('#'))]
+
+    input_df = initial_cleaning(input_df)
+
+    ids = input_df['IdLabel'][~input_df['IdLabel'].isnull()].unique()
+    ids.sort()
+    ids_dict = dict(input_df[['IdLabel', 'IdRFID']].drop_duplicates().dropna().values)
+
+    final_output = pd.DataFrame({})
+
+    for animal_id in tqdm(ids):
+        indices_start = input_df[(input_df['IdLabel'] == animal_id) & (input_df['SystemMsg'] == 'start exp')].index
+        indices_end = input_df[(input_df['IdLabel'] == animal_id) & (input_df['SystemMsg'] == 'end exp')].index
+
+        for session_i in range(len(indices_start)):
+            ind_start = indices_start[session_i]
+            ind_end = indices_end[session_i]
+            subj_data = input_df.iloc[ind_start:ind_end+1, :].reset_index(drop=True)
+
+            cndtn = subj_data['SystemMsg'].apply(
+                lambda x: x.startswith('start trial') if type(x) == str else False)
+            total_trials = subj_data['SystemMsg'][cndtn].apply(lambda x: int(x.split(' ')[2])).max()
+            total_outcomes = (subj_data['SystemMsg'] == 'Reward?').sum()
+
+            wait_poke_ts = subj_data['Timestamp'][subj_data['SystemMsg'] == 'wait poke'] \
+                .reset_index(drop=True)
+
+            trial_start_ts = subj_data['Timestamp'][cndtn] \
+                .reset_index(drop=True)
+            trial_start_ts.name = 'trialStart'
+
+            trial_end_ts = subj_data['Timestamp'][subj_data['SystemMsg'] == 'start iti'] \
+                .reset_index(drop=True)
+            if len(trial_start_ts) != len(trial_end_ts):
+                trial_end_ts = trial_end_ts.append(
+                    pd.Series(
+                        subj_data['Timestamp'][subj_data['SystemMsg'] == 'end exp']
+                    ),
+                    ignore_index=True)
+            trial_end_ts.name = 'trialEnd'
+
+            if len(wait_poke_ts) != len(trial_start_ts):
+                wait_poke_ts = wait_poke_ts[:len(wait_poke_ts)-1]
+
+            start_latency = trial_start_ts - wait_poke_ts
+            start_latency.name = 'startLatency'
+
+            trial_duration = trial_end_ts - trial_start_ts
+            trial_duration.name = 'trialDuration'
+
+            decision = subj_data['MsgValue1'][subj_data['SystemMsg'] == 'decision:'] \
+                .reset_index(drop=True)
+            decision_n = decision.apply(lambda x: x.split(' ')[1])
+            decision_n.name = 'decisionNumber'
+            decision_pos = decision.apply(lambda x: x.split(' ')[2][2])
+            decision_pos.name = 'decisionPosition'
+            decision_img = decision.apply(lambda x: x.split(' ')[2][4])
+            decision_img.name = 'decisionImage'
+
+            decision_ts = subj_data['Timestamp'][subj_data['SystemMsg'] == 'decision:'] \
+                .reset_index(drop=True)
+            decision_latency = decision_ts - trial_start_ts
+            decision_latency.name = 'decisionLatency'
+
+            reward = subj_data['MsgValue1'][subj_data['SystemMsg'] == 'Reward?'] \
+                .reset_index(drop=True)
+            reward.name = 'reward'
+            reward = reward == 'True'
+
+            reward_ready_ts = subj_data['Timestamp'][subj_data['SystemMsg'] == 'reward ready'] \
+                .reset_index(drop=True)
+
+            reward_collected_ts = subj_data['Timestamp'][subj_data['SystemMsg'] == 'reward collected'] \
+                .reset_index(drop=True)
+
+            reward_latency = reward_collected_ts - reward_ready_ts
+            reward_latency.index = reward[reward == True].index
+            reward_latency.name = 'rewardLatency'
+
+            session_out = pd.concat(
+                [trial_start_ts, trial_end_ts, trial_duration, start_latency,
+                 decision_n, decision_pos, decision_img, decision_latency, reward],
+                axis=1)
+            session_out = session_out.join(reward_latency)
+
+            if total_trials != total_outcomes:
+                session_out = session_out.iloc[:total_trials-1, :]
+
+            session_out['trial'] = session_out.index + 1
+            session_out['animalID'] = animal_id
+            session_out['session'] = session_i + 1
+
+            final_output = final_output.append(session_out).reset_index(drop=True)
+
+    return final_output
+
+
+if __name__ == "__main__":
+
+    # interactive selection of an input file and output folder
+    # output file will be saved with the current time in a name
+    root = Tk()
+    root.withdraw()
+    input_file = filedialog.askopenfilename(title='Choose the input file')
+    output_path = filedialog.askdirectory(title='Choose the directory for the output file')
+
+    output_name = input_file.split('/')[-1].replace(' ', '_').replace('.csv', '_PROCESSED.csv')
+
+    output_file = f"{output_path}/{output_name}"
+
+    print("\n" + "="*40)
+    print(f"INPUT FILE: {input_file}")
+    print(f"OUTPUT FOLDER: {output_path}")
+    print("="*40)
+
+    final_output = fcsrtt_data_cleaner(input_file_path=input_file)
+
+    if not final_output.empty:
+        final_output = final_output[[
+            'animalID', 'session', 'trial', 'trialStart', 'trialEnd', 'trialDuration',
+            'startLatency', 'decisionNumber', 'decisionPosition', 'decisionImage', 'decisionLatency',
+            'reward', 'rewardLatency'
+        ]].round(2)
+
+        final_output['trialStart'] = pd.to_datetime(final_output['trialStart'], unit='s')
+        final_output['trialEnd'] = pd.to_datetime(final_output['trialEnd'], unit='s')
+
+        final_output.to_csv(output_file, index=False)
+        print("\nOutput file was saved successfully!")
+        print(f"File Path: {output_file}")
+
