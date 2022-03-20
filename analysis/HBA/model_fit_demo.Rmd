@@ -1,0 +1,163 @@
+---
+title: "Q-Learning model with generated data"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r message=FALSE, warning=FALSE}
+library(rstan)
+library(tidyverse)
+library(data.table)
+```
+
+```{r message=FALSE, warning=FALSE}
+animal_data <- read_csv("generated_data/agent_data.csv")
+true_params <- read_csv("generated_data/true_params.csv")
+animal_data <- animal_data %>% 
+  rename(animalID = subjID)
+  # filter(animalID != "Test2")
+# convert to data.table
+DT <- animal_data %>% 
+  as.data.table()
+subjs <- unique(DT$animalID) # list of all subjects
+```
+
+```{r}
+DT_trials <- data.table(DT[, .N, by = "animalID"])
+general_info <- list(
+  subjs = DT_trials$animalID, # subject ID list
+  n_subjs = length(unique(DT_trials$animalID)), # number of subjects
+  t_subjs = DT_trials$N,   # number of trials for each subject
+  t_max = max(DT_trials$N) # max number of trials
+)
+```
+
+```{r}
+# create arrays using T_max for each subject
+# unused trial values will be coded as -1
+choice  <- array(-1, c(general_info$n_subjs, general_info$t_max))
+reward  <- array(-1, c(general_info$n_subjs, general_info$t_max))
+
+# add actual values of choice and reward in arrays
+for (i in 1:general_info$n_subjs) {
+  subj <- general_info$subjs[i]
+  t <- general_info$t_subjs[i]
+  DT_subj <- DT[DT$animalID == subj]
+
+  choice[i, 1:t]  <- DT_subj$choice
+  reward[i, 1:t]  <- as.integer(DT_subj$reward)
+}
+```
+
+```{r}
+# final list for the model
+dat <- list(
+  N = general_info$n_subjs,
+  T = general_info$t_max, 
+  Tsubj = general_info$t_subjs,
+  choice = choice + 1,
+  reward = reward,
+  Nopt = 2
+)
+```
+
+
+```{r}
+# options(mc.cores = 1)
+# model_file <- "simple_q_model.stan"
+# fit_rl <- stan(
+#   file = model_file, 
+#   data = dat, 
+#   chains = 3,
+#   iter = 1500,
+#   warmup = 500,
+#   init = "random",
+#   seed = 1
+# )
+```
+
+```{r}
+# save(fit_rl, file = "fit_rl_demo.rda")
+load(file = "fit_rl_demo.rda")
+```
+
+# Model diagnostic
+
+```{r}
+# R-hat
+d <- summary(fit_rl)
+rhatData <- data.frame(Rhat = d[["summary"]][, "Rhat"])
+hist(rhatData$Rhat)
+```
+
+
+```{r}
+traceplot(fit_rl, pars = c("mu_pr", "sigma", "mu_alpha", "mu_beta"), inc_warmup = FALSE)
+```
+
+```{r}
+stan_plot(fit_rl, pars=c("mu_alpha"), show_density=T, fill_color = "skyblue")
+```
+
+```{r}
+stan_plot(fit_rl, pars=c("mu_beta"), show_density=T, fill_color = "skyblue")
+```
+
+# Posterior predictive check
+
+```{r}
+y_pred <- rstan::extract(fit_rl, "y_pred")
+y_pred <- y_pred$y_pred
+
+y_pred_mean <- apply(y_pred, c(2,3), mean)
+```
+
+
+```{r}
+numSubjs = general_info$n_subjs  # number of subjects
+
+subjList = general_info$subjs  # list of subject IDs
+maxT = general_info$t_max  # maximum number of trials
+true_y = array(NA, c(numSubjs, maxT)) # true data (`true_y`)
+
+## true data for each subject
+for (i in 1:numSubjs) {
+  tmpID = subjList[i]
+  # tmpData = subset(DT, subjID == tmpID)
+  true_y[i, ] = dat$choice[tmpID, ]  # only for data with a 'choice' column
+}
+
+df <- data.frame()
+for (i in 1:numSubjs) {
+  choice <- c(true_y[i, ], y_pred_mean[i, ])
+  type <- c(rep("True", maxT), rep("PPC", maxT))
+  trial <- c(1:maxT, 1:maxT)
+  subjID <- rep(paste0("Subject ", subjList[i]), maxT*2)
+  temp_df <- data.frame(subjID, trial, choice, type)
+  df <- bind_rows(df, temp_df)
+}
+
+ggplot(data = filter(df, choice > 0), aes(x = trial, y = choice, color = type)) +
+  geom_line() +
+  facet_wrap(~subjID, nrow = 5) +
+  labs(title = "Model Validation",
+       subtitle = "CTR Group")
+```
+
+# Individual parameters
+
+```{r}
+true_params
+```
+
+
+```{r}
+stan_plot(fit_rl, pars=c("alpha"), show_density=T, fill_color = "skyblue")
+```
+
+```{r}
+stan_plot(fit_rl, pars=c("beta"), show_density=T, fill_color = "skyblue")
+```
+
+

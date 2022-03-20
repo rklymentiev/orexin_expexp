@@ -1,3 +1,4 @@
+import argparse
 import pandas as pd
 from tqdm import tqdm
 from datetime import datetime, timedelta
@@ -19,6 +20,7 @@ def initial_cleaning(input_df):
 
 def from_ordinal(ordinal, _epoch=datetime(1899, 12, 30)):
     """Converts serial date-time to DateTime object.
+
     Parameters
     ----------
     ordinal : float or int
@@ -35,6 +37,7 @@ def from_ordinal(ordinal, _epoch=datetime(1899, 12, 30)):
 def fcsrtt_data_cleaner(input_file_path, input_encoding="utf_16", input_sep=";"):
     """Performs data manipulation from the raw csv file. Transform data in a way
     that 1 row represents the single trial.
+
     Parameters
     ----------
     input_file_path : str
@@ -43,23 +46,41 @@ def fcsrtt_data_cleaner(input_file_path, input_encoding="utf_16", input_sep=";")
         Encoding of an input file.
     input_sep : str
         Delimiter to use for an input file.
+
     Returns
     ----------
     final_output : DataFrame
         Resulted DataFrame object.
     """
 
-    # resulted data is encoded to 'utf_16', change if different
-    try:
-        input_df = pd.read_csv(input_file_path, encoding=input_encoding, sep=input_sep)
-        len(input_df['DateTime']) # check whether the `sep` was chosen right
-    except:
-        # exit the function if the input file cannot be opened
-        print("\nError while reading the input file. Change the `encoding` or `sep` parameters in the script.")
-        return None
+    input_df = pd.DataFrame({})
+    for fpath in input_file_path:
+        try:
+            df = pd.read_csv(fpath, encoding=input_encoding, sep=input_sep)
+            len(df['DateTime']) # check whether the `sep` was chosen right
+
+            # drop first rows from the data with the technical info
+            df = df[~df['DateTime'].astype(str).apply(lambda x: x.startswith('#'))]
+            # remove extra columns with additional information
+            df = df.loc[:, :"MsgValue3"]
+            # df['fname'] = fpath.split('/')[-1]
+            input_df = input_df.append(df)
+        except:
+            # exit the function if the input file cannot be opened
+            print("\nError while reading the input file. Change the `encoding` or `sep` parameters in the script.")
+            return None
+
+    # # resulted data is encoded to 'utf_16', change if different
+    # try:
+    #     input_df = pd.read_csv(input_file_path, encoding=input_encoding, sep=input_sep)
+    #     len(input_df['DateTime']) # check whether the `sep` was chosen right
+    # except:
+    #     # exit the function if the input file cannot be opened
+    #     print("\nError while reading the input file. Change the `encoding` or `sep` parameters in the script.")
+    #     return None
 
     # drop first rows from the data with the technical info
-    input_df = input_df[~input_df['DateTime'].astype(str).apply(lambda x: x.startswith('#'))]
+    # input_df = input_df[~input_df['DateTime'].astype(str).apply(lambda x: x.startswith('#'))]
 
     input_df = initial_cleaning(input_df)
 
@@ -70,6 +91,7 @@ def fcsrtt_data_cleaner(input_file_path, input_encoding="utf_16", input_sep=";")
     final_output = pd.DataFrame({})
 
     for animal_id in tqdm(ids):
+        # print(animal_id)
         indices_start = input_df[(input_df['IdLabel'] == animal_id) & (input_df['SystemMsg'] == 'start exp')].index
         indices_end = input_df[(input_df['IdLabel'] == animal_id) & (input_df['SystemMsg'] == 'end exp')].index
 
@@ -138,9 +160,41 @@ def fcsrtt_data_cleaner(input_file_path, input_encoding="utf_16", input_sep=";")
             reward_latency.index = reward[reward == True].index
             reward_latency.name = 'rewardLatency'
 
+            opt1 = subj_data['MsgValue1'][cndtn]\
+                .reset_index(drop=True)\
+                .apply(lambda x: x.split(' ')[2])
+            opt1.name = 'Option1'
+
+            opt2 = subj_data['MsgValue2'][cndtn]\
+                .reset_index(drop=True)\
+                .apply(lambda x: x.split(' ')[2])
+            opt2.name = 'Option2'
+
+            opt3 = subj_data['MsgValue3'][cndtn]\
+                .reset_index(drop=True)\
+                .apply(lambda x: x.split(' ')[2])
+            opt3.name = 'Option3'
+
+            p1 = subj_data['MsgValue1'][cndtn] \
+                .reset_index(drop=True) \
+                .apply(lambda x: x.split('=')[1])
+            p1.name = 'P1'
+
+            p2 = subj_data['MsgValue2'][cndtn] \
+                .reset_index(drop=True) \
+                .apply(lambda x: x.split('=')[1])
+            p2.name = 'P2'
+
+            p3 = subj_data['MsgValue3'][cndtn] \
+                .reset_index(drop=True) \
+                .apply(lambda x: x.split('=')[1])
+            p3.name = 'P3'
+
             session_out = pd.concat(
-                [trial_start_ts, trial_end_ts, trial_duration, start_latency,
-                 decision_n, decision_pos, decision_img, decision_latency, reward],
+                [
+                    trial_start_ts, trial_end_ts, trial_duration, start_latency, opt1, opt2, opt3,
+                    p1, p2, p3, decision_n, decision_pos, decision_img, decision_latency, reward
+                ],
                 axis=1)
             session_out = session_out.join(reward_latency)
 
@@ -150,6 +204,7 @@ def fcsrtt_data_cleaner(input_file_path, input_encoding="utf_16", input_sep=";")
             session_out['trial'] = session_out.index + 1
             session_out['animalID'] = animal_id
             session_out['session'] = session_i + 1
+            session_out['scenario'] = subj_data['MsgValue2'][0]
 
             final_output = final_output.append(session_out).reset_index(drop=True)
 
@@ -158,29 +213,60 @@ def fcsrtt_data_cleaner(input_file_path, input_encoding="utf_16", input_sep=";")
 
 if __name__ == "__main__":
 
+    parser = argparse.ArgumentParser(
+        description='Arguments for specification of input file details.')
+    parser.add_argument(
+        '-s', '--sep',
+        dest="separator", type=str,
+        default=';',
+        help='Separator in the file(s) (, ; \\t)'
+    )
+    parser.add_argument(
+        '-e', '--encoding',
+        dest="encoding", type=str,
+        default='utf_16',
+        help='Encoding of the input file(s) (utf_16, utf_8)'
+    )
+
+    parser.add_argument(
+        '-o', '--output',
+        dest="output", type=str,
+        default=' ',
+        help='Output file name'
+    )
+
+    args = parser.parse_args()
+
     # interactive selection of an input file and output folder
     # output file will be saved with the current time in a name
     root = Tk()
     root.withdraw()
-    input_file = filedialog.askopenfilename(title='Choose the input file')
+    input_files = filedialog.askopenfilenames(title='Choose the input file(s)')
     output_path = filedialog.askdirectory(title='Choose the directory for the output file')
 
-    output_name = input_file.split('/')[-1].replace(' ', '_').replace('.csv', '_PROCESSED.csv')
+    if args.output == ' ':
+        output_name = input_files[0].split('/')[-1].replace(' ', '_').replace('.csv', '_PROCESSED.csv')
+    else:
+        output_name = args.output
 
     output_file = f"{output_path}/{output_name}"
 
     print("\n" + "="*40)
-    print(f"INPUT FILE: {input_file}")
-    print(f"OUTPUT FOLDER: {output_path}")
+    print(f"Input file(s): {input_files}")
+    print(f"Output folder: {output_path}")
     print("="*40)
 
-    final_output = fcsrtt_data_cleaner(input_file_path=input_file)
+    final_output = fcsrtt_data_cleaner(
+        input_file_path=input_files,
+        input_encoding=args.encoding,
+        input_sep=args.separator)
 
-    if not final_output.empty:
+    if final_output is not None:
         final_output = final_output[[
-            'animalID', 'session', 'trial', 'trialStart', 'trialEnd', 'trialDuration',
-            'startLatency', 'decisionNumber', 'decisionPosition', 'decisionImage', 'decisionLatency',
-            'reward', 'rewardLatency'
+            'animalID', 'session', 'scenario', 'trial', 'trialStart', 'trialEnd', 'trialDuration',
+            'startLatency', 'Option1', 'Option2', 'Option3', 'P1', 'P2', 'P3',
+            'decisionNumber', 'decisionPosition', 'decisionImage',
+            'decisionLatency', 'reward', 'rewardLatency'
         ]].round(2)
 
         final_output['trialStart'] = pd.to_datetime(final_output['trialStart'], unit='s')
@@ -188,5 +274,4 @@ if __name__ == "__main__":
 
         final_output.to_csv(output_file, index=False)
         print("\nOutput file was saved successfully!")
-        print(f"File Path: {output_file}")
-
+        print(f"File path: {output_file}")
