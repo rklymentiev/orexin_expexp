@@ -1,4 +1,5 @@
 import argparse
+import time
 import pandas as pd
 from tqdm import tqdm
 from datetime import datetime, timedelta
@@ -99,6 +100,14 @@ def fcsrtt_data_cleaner(input_file_path, input_encoding="utf_16", input_sep=";")
             ind_start = indices_start[session_i]
             ind_end = indices_end[session_i]
             subj_data = input_df.iloc[ind_start:ind_end+1, :].reset_index(drop=True)
+
+            # print(animal_id)
+            # time.sleep(0.5)
+            # print(f'Animals: {animal_id}, session: {session_i}')
+
+            if 'Unexpected' in subj_data['SystemMsg'].values:
+                # print('all good')
+                continue
 
             cndtn = subj_data['SystemMsg'].apply(
                 lambda x: x.startswith('start trial') if type(x) == str else False)
