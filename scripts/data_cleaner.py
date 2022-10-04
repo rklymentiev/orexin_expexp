@@ -9,12 +9,13 @@ from tkinter import Tk, filedialog
 def initial_cleaning(input_df):
     # sort the values since for some reason observations sometimes mixed in time
     input_df['DateTime'] = input_df['DateTime'].astype(float)
-    input_df.sort_values(by='DateTime', inplace=True)
-    input_df.reset_index(drop=True, inplace=True)
 
     # some datetime manipulations
     input_df['Timestamp'] = input_df['DateTime'].apply(lambda x: datetime.timestamp(from_ordinal(x)))
     input_df['DateTime'] = input_df['Timestamp'].apply(lambda x: datetime.fromtimestamp(x))
+
+    input_df.sort_values(by='Timestamp', inplace=True)
+    input_df.reset_index(drop=True, inplace=True)
 
     return input_df
 
@@ -97,15 +98,23 @@ def fcsrtt_data_cleaner(input_file_path, input_encoding="utf_16", input_sep=";")
         indices_end = input_df[(input_df['IdLabel'] == animal_id) & (input_df['SystemMsg'] == 'end exp')].index
 
         for session_i in range(len(indices_start)):
-            ind_start = indices_start[session_i]
-            ind_end = indices_end[session_i]
-            subj_data = input_df.iloc[ind_start:ind_end+1, :].reset_index(drop=True)
+
+            try:
+                ind_start = indices_start[session_i]
+                ind_end = indices_end[session_i]
+                subj_data = input_df.iloc[ind_start:ind_end+1, :].reset_index(drop=True)
+            except:
+                continue
 
             # print(animal_id)
             # time.sleep(0.5)
             # print(f'Animals: {animal_id}, session: {session_i}')
 
             if 'Unexpected' in subj_data['SystemMsg'].values:
+                # print('all good')
+                continue
+
+            if 'start trial 1' not in subj_data['SystemMsg'].values:
                 # print('all good')
                 continue
 
@@ -179,10 +188,10 @@ def fcsrtt_data_cleaner(input_file_path, input_encoding="utf_16", input_sep=";")
                 .apply(lambda x: x.split(' ')[2])
             opt2.name = 'Option2'
 
-            opt3 = subj_data['MsgValue3'][cndtn]\
-                .reset_index(drop=True)\
-                .apply(lambda x: x.split(' ')[2])
-            opt3.name = 'Option3'
+            # opt3 = subj_data['MsgValue3'][cndtn]\
+            #     .reset_index(drop=True)\
+            #     .apply(lambda x: x.split(' ')[2])
+            # opt3.name = 'Option3'
 
             p1 = subj_data['MsgValue1'][cndtn] \
                 .reset_index(drop=True) \
@@ -194,15 +203,21 @@ def fcsrtt_data_cleaner(input_file_path, input_encoding="utf_16", input_sep=";")
                 .apply(lambda x: x.split('=')[1])
             p2.name = 'P2'
 
-            p3 = subj_data['MsgValue3'][cndtn] \
-                .reset_index(drop=True) \
-                .apply(lambda x: x.split('=')[1])
-            p3.name = 'P3'
+            # p3 = subj_data['MsgValue3'][cndtn] \
+            #     .reset_index(drop=True) \
+            #     .apply(lambda x: x.split('=')[1])
+            # p3.name = 'P3'
+
+            correction_trial = subj_data['MsgValue1'][subj_data['SystemMsg'] == 'Correction trial ']\
+                .reset_index(drop=True)
+            correction_trial.name = 'correctionTrial'
 
             session_out = pd.concat(
                 [
-                    trial_start_ts, trial_end_ts, trial_duration, start_latency, opt1, opt2, opt3,
-                    p1, p2, p3, decision_n, decision_pos, decision_img, decision_latency, reward
+                    trial_start_ts, trial_end_ts, trial_duration, start_latency, opt1, opt2,
+                    # opt3,p3,
+                    p1, p2, decision_n, decision_pos, decision_img, decision_latency, reward,
+                    correction_trial
                 ],
                 axis=1)
             session_out = session_out.join(reward_latency)
@@ -272,14 +287,21 @@ if __name__ == "__main__":
 
     if final_output is not None:
         final_output = final_output[[
-            'animalID', 'session', 'scenario', 'trial', 'trialStart', 'trialEnd', 'trialDuration',
-            'startLatency', 'Option1', 'Option2', 'Option3', 'P1', 'P2', 'P3',
+            'animalID', 'session', 'scenario', 'trial', 'correctionTrial',
+            'trialStart', 'trialEnd', 'trialDuration',
+            'startLatency', 'Option1', 'Option2',
+            # 'Option3',
+            'P1', 'P2',
+            # 'P3',
             'decisionNumber', 'decisionPosition', 'decisionImage',
             'decisionLatency', 'reward', 'rewardLatency'
         ]].round(2)
 
-        final_output['trialStart'] = pd.to_datetime(final_output['trialStart'], unit='s')
-        final_output['trialEnd'] = pd.to_datetime(final_output['trialEnd'], unit='s')
+        # final_output['trialStart'] = pd.to_datetime(final_output['trialStart'], unit='s')
+        # final_output['trialEnd'] = pd.to_datetime(final_output['trialEnd'], unit='s')
+
+        final_output['trialStart'] = final_output['trialStart'].apply(lambda x: datetime.fromtimestamp(x))
+        final_output['trialEnd'] = final_output['trialEnd'].apply(lambda x: datetime.fromtimestamp(x))
 
         final_output.to_csv(output_file, index=False)
         print("\nOutput file was saved successfully!")

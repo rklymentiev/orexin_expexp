@@ -75,6 +75,7 @@ if __name__ == "__main__":
         plt.plot(
             temp_df['trialTotal'],
             prob_of_first)
+        plt.axhline(0.5, linestyle='dashed', linewidth=1, color='red')
         for ses_start in temp_df['trialTotal'][temp_df['trial'] == 1]:
             plt.axvline(ses_start, color='black')
         plt.ylim([-0.1,1.1])
@@ -144,6 +145,7 @@ if __name__ == "__main__":
             temp_df['session'],
             temp_df['optimal_choice'],
             'o-')
+        plt.axhline(0.5, linestyle='dashed', linewidth=1, color='red')
         plt.title(animal_id, fontweight='bold', fontsize=14)
         plt.xlim([0.5, opt_choice_df.session.max() + 0.5])
         plt.ylim([-0.1, 1.1])
@@ -199,4 +201,3 @@ if __name__ == "__main__":
     plt.close()
 
     print("Done!")
-
